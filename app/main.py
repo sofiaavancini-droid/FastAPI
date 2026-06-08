@@ -1,8 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from . import schemas, crud, models
-
+from .import schemas, crud, models
 
 from .database import engine, get_db
 
@@ -63,3 +62,41 @@ def eliminar_producto(
         )
 
     return {"mensaje": "Producto eliminado"}
+
+
+from .utils import verify_password
+from .auth import crear_token
+from .deps import get_current_user, require_admin
+from fastapi.security import OAuth2PasswordRequestForm
+
+@app.post("/usuarios", response_model=schemas.UsuarioResponse, status_code=status.HTTP_201_CREATED)
+def registrar_usuario(usuario: schemas.UsuarioCreate, db: Session = Depends(get_db)):
+    try:
+        return crud.crear_usuario(db, usuario)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/login", response_model=schemas.Token)
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # 1. Buscamos al usuario por su email/username
+    user = crud.obtener_usuario_por_email(db, form_data.username)
+    
+    # 2. Verificamos si existe y si la contraseña coincide
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+        
+    # 3. Generamos el token JWT incluyendo el email y si es admin o no
+    token = crear_token(sub=user.email, es_admin=user.es_admin)
+    
+    # 4. Devolvemos el token con la estructura del esquema schemas.Token
+    return {"access_token": token, "token_type": "bearer"}
+
+@app.get("/usuarios/me", response_model=schemas.UsuarioResponse)
+def leer_perfil(current_user= Depends(get_current_user)):
+    # Esta ruta está protegida, solo entra si mandas un token válido
+    return current_user
+
+@app.get("/admin/ping")
+def admin_ping(admin= Depends(require_admin)):
+    # Esta ruta está súper protegida, solo entra si el usuario tiene es_admin = True
+    return {"ok": True, "role": "admin"}
